@@ -4,7 +4,7 @@
  * PageMarkdown
  *
  * Export ProcessWire pages to Markdown format.
- * Supports: Text, Textarea, CKEditor, Integer, Float, Checkbox, Datetime,
+ * Supports: Text, Textarea, CKEditor, TinyMCE, Integer, Float, Checkbox, Datetime,
  * Email, URL, Color, MapMarker, SelectableOptions, PageArray, Page,
  * Pagefiles/Pageimages, Repeater, Repeater Matrix, ProFields Table, ProFields Combo.
  *
@@ -20,7 +20,7 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
     public static function getModuleInfo(): array {
         return [
             'title'    => 'Page Markdown',
-            'version'  => 113,
+            'version'  => 114,
             'summary'  => 'Export any page to a clean Markdown file. Adds an export button to the page editor.',
             'author'   => 'Maxim Semenov',
             'href'     => 'https://github.com/mxmsmnv/PageMarkdown',
@@ -34,7 +34,6 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
         'showFieldLabels' => 1,
         'ignoredFields'   => [
             'pass', 'roles', 'permissions', 'settings', 'admin_theme',
-            'f_flavours', 'f_flavours_END',
         ],
         'ignoredTypes'    => [
             'FieldtypeFieldsetOpen', 'FieldtypeFieldsetTabOpen', 'FieldtypeFieldsetClose',
@@ -179,9 +178,6 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
     // -------------------------------------------------------------------------
 
     protected function generateMarkdown(Page $page): string {
-        // Load a fresh copy of the page with output formatting disabled.
-        // ProcessPageEdit passes a page with of(true) and cached formatted values;
-        // we must load fresh so that FieldtypePage returns Page/PageArray objects, not formatted strings.
         $pageId = $page->id;
         $this->wire('pages')->uncacheAll();
         $page = $this->wire('pages')->get("id=$pageId, include=all");
@@ -239,16 +235,14 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
             return $this->renderFiles($value);
         }
 
-        // 3. PAGE REFERENCE (FieldtypePage) — handle before generic PageArray check
-        // derefAsPage=0 → PageArray, derefAsPage=1 → Page or NullPage,
-        // derefAsPage=2 → Page or boolean false when empty
+        // 3. PAGE REFERENCE
         if($type && str_contains($type->className(), 'FieldtypePage')) {
             if($value instanceof Page)      return $this->renderPage($value);
             if($value instanceof PageArray) return $this->renderPageArray($value);
-            return ''; // boolean false or null — empty
+            return '';
         }
 
-        // 4. PAGE ARRAY (other WireArray of pages)
+        // 4. PAGE ARRAY
         if($value instanceof PageArray) {
             return $this->renderPageArray($value);
         }
@@ -258,67 +252,70 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
             return $this->renderPage($value);
         }
 
-        // 5. SELECTABLE OPTIONS (FieldtypeOptions)
+        // 6. SELECTABLE OPTIONS
         if($value instanceof WireArray && $this->isOptionsField($field)) {
             return $this->renderSelectableOptions($value);
         }
 
-        // 6. PROFIELDS COMBO
-        if(is_object($value) && str_contains(get_class($value), 'Combo')) {
+        // 7. PROFIELDS COMBO — ComboValue has getSubfields(), detect by that
+        if(is_object($value) && method_exists($value, 'getSubfields')) {
             return $this->renderCombo($value);
         }
 
-        // 7. PROFIELDS TABLE
+        // 8. PROFIELDS TABLE
         if($this->isTableField($value, $field)) {
             return $this->renderTable($value);
         }
 
-        // 8. MAP MARKER
+        // 9. MAP MARKER
         if(is_object($value) && str_contains(get_class($value), 'MapMarker')) {
             return $this->renderMapMarker($value);
         }
 
-        // 9. DATETIME
+        // 10. DATETIME
         if($type && str_contains($type->className(), 'Datetime')) {
             return $this->renderDatetime($value);
         }
 
-        // 10. CHECKBOX
+        // 11. CHECKBOX
         if($type && str_contains($type->className(), 'Checkbox')) {
             return $value ? 'Yes' : 'No';
         }
 
-        // 11. INTEGER / FLOAT
+        // 12. INTEGER / FLOAT
         if($type && (str_contains($type->className(), 'Integer') || str_contains($type->className(), 'Float'))) {
             return (string) $value;
         }
 
-        // 12. EMAIL
+        // 13. EMAIL
         if($type && str_contains($type->className(), 'Email') && is_string($value) && $value !== '') {
             return '[' . $value . '](mailto:' . $value . ')';
         }
 
-        // 13. URL
+        // 14. URL
         if($type && str_contains($type->className(), 'URL') && is_string($value) && $value !== '') {
             return '[' . $value . '](' . $value . ')';
         }
 
-        // 14. COLOR
+        // 15. COLOR
         if($type && str_contains($type->className(), 'Color')) {
             return '`#' . ltrim((string) $value, '#') . '`';
         }
 
-        // 15. GENERIC STRING / HTML
+        // 16. GENERIC STRING / HTML
         if(is_string($value)) {
+            if($type && str_contains($type->className(), 'TinyMCE')) {
+                return $this->processTinyMceContent($value);
+            }
             return $this->processHtmlContent($value);
         }
 
-        // 16. SCALAR FALLBACK
+        // 17. SCALAR FALLBACK
         if(is_scalar($value)) {
             return (string) $value;
         }
 
-        // 17. WIRE ARRAY FALLBACK
+        // 18. WIRE ARRAY FALLBACK
         if($value instanceof WireArray) {
             $items = [];
             foreach($value as $item) {
@@ -328,7 +325,6 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
             return implode(', ', $items);
         }
 
-        // 18. UNKNOWN OBJECT (e.g. WireSEO, WireData subclasses) — skip silently
         return '';
     }
 
@@ -372,16 +368,12 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
         $typeId = (int) $item->repeater_matrix_type;
         if(!$typeId) return '';
 
-        // Resolve the Field object that owns this repeater item.
-        // Signature: getMatrixTypeLabel($type, Field $field = null, $language = null)
         $matrixField = null;
 
-        // Primary: getForField() works when item is loaded in page context
         if(method_exists($item, 'getForField')) {
             $matrixField = $item->getForField();
         }
 
-        // Fallback: derive field from template name "repeater_{fieldname}"
         if(!$matrixField) {
             $tplName = $item->template->name;
             if(str_starts_with($tplName, 'repeater_')) {
@@ -390,8 +382,10 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
             }
         }
 
-        if($matrixField && method_exists($matrixField->type, 'getMatrixTypeLabel')) {
-            $label = $matrixField->type->getMatrixTypeLabel($typeId, $matrixField);
+        // getMatrixTypeLabel() is a method of the Field object (RepeaterMatrixField),
+        // not of the Fieldtype. Signature: getMatrixTypeLabel(int $type, $language = null)
+        if($matrixField && method_exists($matrixField, 'getMatrixTypeLabel')) {
+            $label = $matrixField->getMatrixTypeLabel($typeId);
             if($label) return ' [' . $label . ']';
         }
 
@@ -401,8 +395,7 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
     protected function renderPage(Page $page): string {
         if(!$page->id) return '';
         $title = $page->get('title|name');
-        // Use httpUrl when available, fall back to url, then plain title
-        $url = $page->httpUrl ?: $page->url ?: '';
+        $url   = $page->httpUrl ?: $page->url ?: '';
         return $url ? '[' . $title . '](' . $url . ')' : $title;
     }
 
@@ -438,55 +431,96 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
     }
 
     protected function renderCombo(mixed $value): string {
+        // ComboValue (extends WireData) — iterate via getSubfields(), not foreach
         $out = '';
-        foreach($value as $key => $val) {
+        foreach($value->getSubfields() as $subfield) {
+            $name = $subfield->name;
+            $val  = $value->get($name);
             if($this->isEmpty($val)) continue;
-            $label  = ucfirst($key);
-            $valStr = $this->stringifyComplexValue($val);
+            $label  = $subfield->label ?: $name;
+            $valStr = $this->renderComboSubfieldValue($val, $subfield->type);
             if($valStr !== '') $out .= "- **{$label}**: {$valStr}\n";
         }
         return $out ? "\n" . $out : '';
     }
 
+    protected function renderComboSubfieldValue(mixed $val, string $subfieldType): string {
+        if($val instanceof Pagefiles)  return $this->renderFiles($val);
+        if($val instanceof PageArray)  return $this->renderPageArray($val);
+        if($val instanceof Page)       return $this->renderPage($val);
+
+        if(is_array($val)) {
+            return implode(', ', array_filter(array_map('strval', $val)));
+        }
+
+        if(is_string($val)) {
+            if($subfieldType === 'CKEditor' || $subfieldType === 'TinyMCE') {
+                return $this->processHtmlContent($val);
+            }
+            return trim($val);
+        }
+
+        if(is_bool($val))   return $val ? 'Yes' : 'No';
+        if(is_scalar($val)) return (string) $val;
+        return '';
+    }
+
     protected function renderTable(mixed $value): string {
-        $rows = [];
-        foreach($value as $row) { $rows[] = $row; }
-        if(empty($rows)) return '';
+        // $value is TableRows — column definitions come from getColumns()
+        if(count($value) === 0) return '';
 
-        $firstRow  = $rows[0];
-        $dataArray = (is_object($firstRow) && method_exists($firstRow, 'getArray'))
-            ? $firstRow->getArray()
-            : (array) $firstRow;
+        // Build column map: name => label
+        $colDefs = [];
+        if(method_exists($value, 'getColumns')) {
+            foreach($value->getColumns() as $col) {
+                $name = $col['name'] ?? '';
+                if($name === '') continue;
+                $colDefs[$name] = $col['label'] ?: ucfirst($name);
+            }
+        }
 
-        $allCols = array_filter(array_keys($dataArray), fn($k) => !in_array($k, ['id', 'pages_id', 'sort']));
+        // Fallback: derive from first row keys
+        if(empty($colDefs)) {
+            $firstRow = $value->first();
+            if($firstRow) {
+                $skip = ['id', 'pages_id', 'sort', 'rowId'];
+                $data = method_exists($firstRow, 'getArray') ? $firstRow->getArray() : (array) $firstRow;
+                foreach(array_keys($data) as $k) {
+                    if(!in_array($k, $skip)) $colDefs[$k] = ucfirst($k);
+                }
+            }
+        }
 
-        // Build full matrix first
+        if(empty($colDefs)) return '';
+
+        // Build matrix
         $matrix = [];
-        foreach($rows as $row) {
-            $rowData  = (is_object($row) && method_exists($row, 'getArray')) ? $row->getArray() : (array) $row;
+        foreach($value as $row) {
             $rowClean = [];
-            foreach($allCols as $col) {
-                $v = isset($rowData[$col]) ? $this->stringifyComplexValue($rowData[$col]) : '';
-                $v = str_replace(["\r", "\n", "|", "\xc2\xa0"], [" ", " ", "\\|", " "], $v);
-                $rowClean[$col] = trim($v);
+            foreach(array_keys($colDefs) as $colName) {
+                $v = method_exists($row, 'get') ? $row->get($colName) : '';
+                $v = $this->stringifyComplexValue($v ?? '');
+                $v = str_replace(["\r", "\n", "|"], [" ", " ", "\\|"], $v);
+                $rowClean[$colName] = trim($v);
             }
             $matrix[] = $rowClean;
         }
 
-        // Drop columns where every row is empty
-        $cols = array_filter($allCols, function($col) use ($matrix) {
+        // Drop empty columns
+        $usedCols = array_filter(array_keys($colDefs), function($col) use ($matrix) {
             foreach($matrix as $row) {
                 if(($row[$col] ?? '') !== '') return true;
             }
             return false;
         });
 
-        if(empty($cols)) return '';
+        if(empty($usedCols)) return '';
 
-        $table  = "| " . implode(" | ", array_map('ucfirst', $cols)) . " |\n";
-        $table .= "| " . str_repeat(" --- |", count($cols)) . "\n";
+        $headers = array_map(fn($col) => $colDefs[$col], $usedCols);
+        $table   = "| " . implode(" | ", $headers) . " |\n";
+        $table  .= "| " . str_repeat(" --- |", count($usedCols)) . "\n";
         foreach($matrix as $row) {
-            $cells = array_map(fn($col) => $row[$col] ?? '', $cols);
+            $cells = array_map(fn($col) => $row[$col] ?? '', $usedCols);
             $table .= "| " . implode(" | ", $cells) . " |\n";
         }
 
@@ -513,6 +547,21 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
     // -------------------------------------------------------------------------
     // HTML → Markdown converter
     // -------------------------------------------------------------------------
+
+    protected function processTinyMceContent(string $html): string {
+        // Resolve data-mce-src / data-mce-href to real attributes
+        $html = preg_replace('/(<img[^>]+)data-mce-src="([^"]*)"([^>]*>)/i', '$1src="$2"$3', $html);
+        $html = preg_replace('/(<a[^>]+)data-mce-href="([^"]*)"([^>]*>)/i',  '$1href="$2"$3', $html);
+        // Strip remaining data-mce-* attributes and contenteditable
+        $html = preg_replace('/\s+data-mce-[a-z\-]+=(?:"[^"]*"|\'[^\']*\')/i', '', $html);
+        $html = preg_replace('/\s+contenteditable="[^"]*"/i', '', $html);
+        // Strip mce-* CSS classes
+        $html = preg_replace_callback('/class="([^"]*)"/i', function($m) {
+            $classes = trim(preg_replace('/\bmce-\S+\s*/i', '', $m[1]));
+            return $classes !== '' ? 'class="' . $classes . '"' : '';
+        }, $html);
+        return $this->processHtmlContent($html);
+    }
 
     protected function processHtmlContent(string $html): string {
         if($this->cleanEmptyTags) {
@@ -645,9 +694,7 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
     }
 
     protected function isTableField(mixed $value, ?Field $field = null): bool {
-        // Prefer explicit type check — only ProFields Table should render as table
         if($field?->type && str_contains($field->type->className(), 'Table')) return true;
-        // Fallback for cases without field context: check class name of value object
         if(!is_object($value)) return false;
         return str_contains(get_class($value), 'TableRows') || str_contains(get_class($value), 'FieldtypeTable');
     }
