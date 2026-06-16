@@ -1,6 +1,10 @@
 Page Markdown for ProcessWire
 =============================
 
+**Author:** Maxim Semenov  
+**Website:** [smnv.org](https://smnv.org)  
+**Email:** [maxim@smnv.org](mailto:maxim@smnv.org)
+
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).  
 
 Page Markdown is a module for ProcessWire that enables users to export any page into a clean, well-structured Markdown file directly from the page editor.

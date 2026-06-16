@@ -8,7 +8,7 @@
  * Email, URL, Color, MapMarker, SelectableOptions, PageArray, Page,
  * Pagefiles/Pageimages, Repeater, Repeater Matrix, ProFields Table, ProFields Combo.
  *
- * @author Maxim Semenov
+ * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @link https://github.com/mxmsmnv/PageMarkdown
  * @license MIT
  * @since 2026-03-21
@@ -23,7 +23,7 @@ class PageMarkdown extends WireData implements Module, ConfigurableModule {
             'version'  => 114,
             'summary'  => 'Export any page to a clean Markdown file. Adds an export button to the page editor.',
             'author'   => 'Maxim Semenov',
-            'href'     => 'https://github.com/mxmsmnv/PageMarkdown',
+            'href'     => 'https://smnv.org',
             'singular' => true,
             'autoload' => true,
             'icon'     => 'file-text-o',
